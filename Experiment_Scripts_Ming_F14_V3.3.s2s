@@ -1,0 +1,599 @@
+'Experiment_Script_Ming_v3.0 
+
+' -----------------------------------------------------Update Note----------------------------------------------------
+' !!!!! Read the following notes carefully before using the script !!!!!
+' ISI is not limited anymore and can be arbitary as long as it's somewhat longer than the longest stimulus that would be played; 
+'           ISI > V5+V10+V11
+' !!!!! For the same reason, David's analyzing script cannot be used directly without changing certain parameters. 
+' Change the configuration file and make sure it allows the recording duration you required. 
+
+' -----------------------------------------------------Important note1----------------------------------------------------
+' You need both the sampling rate file and duration file of the stimuli. 
+' Before recording starts, script would check whether the whole part of stimulus could be played within the ISI you requested. 
+' If not, it tells u which stimulus is too long 
+
+' -----------------------------------------------------Important note2----------------------------------------------------
+' In order for the scripts to work appropriately: 
+' Corresponding Sequence File & Configuration File are required.  
+' specifically, in Sequence File, "SET    0.01,3277,0"
+'               in Configuration File, you need to use Trigger Mode & Trigger Mark is "A" 
+
+' -----------------------------------------------------Important note3----------------------------------------------------
+' It is the Sequence File that really determines the ISI; the executation time of the scripts should confirm to the speed 
+' of Sequence File, not the other way around; 
+' One loop in Sequence File represents one recording session. 
+' The function of the script is to Start the recording, update the stimulus in two Waveform PlayArea A & B of CED, and Stop the recording. 
+
+' -----------------------------------------------------Important note4----------------------------------------------------
+' The configuration file from different versions of spike2 may be not compatible. 
+' Also, you need to make sure the recording duration set in the Configuration File is long enough to hold the recording 
+' set in the Sequence File; e.g., in the Trigger Mode (Sampling Configuration), if the sampling duration is set to 0.5 seconds,
+' while the recording duration required in the Sequence File (determined by ISI in script file) is 0.55 seconds (prestim + afterstim), 
+' the recording would also be cut off.
+
+' -----------------------------------------------------Part1----------------------------------------------------
+' Define the variables that would be used
+
+' nstim%: # of stim  
+' istim%: iteration num 
+' listfil$:   
+' srate%: samping rate 1X100;  sratfac%: samping rate/default DAC rate
+' stimlen%:  
+' datawin%:  
+' datfiln$:    datfilntxt$:     datfilnsmr$: 
+var listfil$, datawin%, str1$, datfiln$;
+var datfilntxt$, datfilnsmr$;
+var nreps%, nqstims%, instims%, inreps%, tstims%, iarr%, stimseq%[4000];
+var fh%, lh%;			'file handle for the binary file & log handle 
+var sfilnam$[2][100], sfil$;		'set up an array storing stim code and stim filename; 100 is the maximum # of stimuli that can be stored. 
+var sratfac[100];
+
+'default DAC parameters
+var dacrate%, stimlen%;
+dacrate% := 40000;
+
+' -----------------------------------------------------Part2----------------------------------------------------
+'' Define the directory where configuration and sequence files are stored and load them
+Logclear();							'show and clear the logfile				
+FilePathSet("C:\\Spike7\\currentdata\\");
+'define sampling and seq variables
+var confile$, ssfile$, fnh%, svh%, wavecopy%, ind%; 
+var pwa%, alen%, cstim%, curstim1$, curstim2$, key%, cstimno%[4],isi;
+confile$ := "Config_File_Ming_Spring15_V1.0.S2C";		'name of the config file
+ssfile$ := "Sequence_File_Ming_F14_V2.3.pls";		'name of the sequence file
+
+''load up sampling and sequence programs
+var ss%;         'ss% reports whether configuration or sequence loading succeeds 
+ss% := FileOpen(confile$,6);		'load the configuration, if good ss%=0
+	if ss% < 0 then	PrintLog("configfile=",ss%,"ERROR!"); PrintLog(Error$(ss%));halt;
+	endif;
+ss% := SampleSequencer(ssfile$);		'load the sequence
+	if ss% < 0 then 	PrintLog("sequencefile=",ss%,"ERROR!"); PrintLog(Error$(ss%));halt;
+    endif; 
+Yield(.25);		'wait .25 sec or so the program could release unused memory 
+
+
+' -----------------------------------------------------Part3----------------------------------------------------
+'Query stim list file, get stim filenames, and Load stimuli into Computer Memory. 
+'Loadin the stimuli and check whether they're correct. 
+fh% := FileOpen("*.txt",8,0,"Choose Stimulus List File");		'FileOpen result
+if fh%<0 then message("No such file");PrintLog(fh%);str1$ := Error$(fh%);PrintLog(str1$);FileClose();halt; endif;
+
+'' Read the stimlist file
+var nstims%, istim%;     
+' nstim%: # of stims; 
+' istim%: loops through all the stims
+nstims% := 2; 
+Read(nstims%); 		'read in the number of stims
+PrintLog(listfil$,"number of stims  ",nstims%);     'listfile$ not initialized???     
+for istim% := 1 to nstims% do			'read in the filenames and rates
+	Read(sfilnam$[1][istim%]);      'readin the stim name and write into 1st column sfilname
+	Read(sratfac[istim%]);          'readin sampling_rate for each stim
+    sratfac[istim%] := sratfac[istim%]/dacrate%;			'convert to ratio factor
+    PrintLog(istim%, "  ", sfilnam$[1][istim%],"  ",sratfac[istim%]);
+next;
+FileClose();							'close the list file
+
+''load up the stimuli
+var srh%, temp%, checkstimduration[100]; 
+var stimarr%[88888][100];
+var ptsgot%;	'number of points gotten in read
+ptsgot% := 0;   'ptsgot% would store the number of data points that the longest stimulus has
+for istim% := 1 to nstims% do
+	sfil$ := sfilnam$[1][istim%]; 
+	fh% :=FileOpen(sfil$,9,0);
+	PrintLog(istim%,"  ", sfil$,"..Loading ");
+	if fh%<0 
+    then Message("Missing stim file, quitting");
+        halt;
+    endif; 
+	temp% := BReadSize(2,stimarr%[][istim%]); 'read the finary file into computer memory
+    checkstimduration[istim%] := temp%/(sratfac[istim%]*dacrate%); 'obtain the stimulus duration from dividing number of data points by sampling rate
+    PrintLog("Stimulus Duration: ", checkstimduration[istim%], " seconds");
+    if temp% > ptsgot% then 
+        ptsgot% := temp%; ' the maximum number of points that the stimulus has
+    endif
+	'if ((2*ptsgot%) <> stimlen%) then Message("Error reading pts"); halt endif;
+	'ArrMul(stimarr%[][istim%],2);    'comment out multiply.
+	'stimlen% := ptsgot%;	
+	FileClose();
+next;
+PrintLog(ptsgot%);  'set stimlen to number of points of the longest stimulus so that the preserved PlayWaveArea is large enough to hold every stimulus
+stimlen% := ptsgot%; 'update the stimlem% to the duration of the longest stimulus so that the data are transferred more efficiently to CED
+'display stimulus data
+srh% := SetResult(nstims%,stimlen%,.025,0,"BINARY DATA","mS"); 'set up view window
+for istim% := 1 to nstims% do 
+	ArrConst(View(srh%,istim%).[],stimarr%[:stimlen%][istim%]);
+	Optimise(istim%);
+next;
+
+View(srh%); Window(40,0,100,100);WindowVisible(1);	'set window to useful size and display data
+If(Query("stims correct?","YES, enter info","No, quit"))=0 then 
+halt; 
+endif;
+FileClose();
+
+' -----------------------------------------------------Part4----------------------------------------------------
+'input the ISI
+isi := 6.0;				'set default ISI onset-onset				
+isi := Input("IStimInt (onset-onset): ",isi);	'get value from user
+
+' prestim: recording duration before stimulus is presented; 
+' afterstim: recording duration from stimulus onset
+' gapduration: duration without recording activity between trials
+var prestim, afterstim, gapduration;   
+if isi < 4.0 then
+    prestim := isi*100000*2.5/10;
+    afterstim := isi*100000*5/10;
+    gapduration := isi*100000*2.5/10-5200; 
+else
+    prestim := isi*100000 * (1.0 / isi);
+    afterstim := isi*100000 * ((isi - 1 - 1)/ isi);
+    gapduration := isi*100000 * (1 / isi) - 5200; 
+endif    
+
+' Build the stimset USing Stimset, StimOrder, & Shuffle function
+' The output is stored in stimseq%
+
+'Choosing stim order
+if Query("Use Stimordering or supply file", "Order","File")=1 then
+    ' Create the stimulus set
+    Stimset();
+    StimOrder(); ' Whether randomize the stimulus order
+else    
+    StimInput(); 'open stim sequence file first number is number of stims 
+    If Query("Randomize the stimulus order from file?", "Use pre-loaded/generated order", "Randomize")=0 then
+    'do the shuffle
+    shuffle(stimseq%[:tstims%]);				'pass only the subarray actually used				
+    endif;
+endif;
+
+' Check whether the stimulus duration is longer than recording duration
+var fhd%, checkptsgot%;
+fhd% := FileOpen("*.txt",8,0,"Choose Stimuli Duration File");		'FileOpen result
+if fhd%<0 then message("No such file");PrintLog(fh%);str1$ := Error$(fh%);PrintLog(str1$);FileClose();halt; endif;
+'' Read the stimlist duration file
+var nstimsduration%;
+Read(nstimsduration%); 		'read in the number of stims   
+if nstimsduration% <> nstims% then message("# of stimuli don't match between list file and duration file!");FileClose();halt;endif;
+var stimduration[100], stimfilname$[2][100]; 
+for istim% := 1 to nstims% do			'read in the filenames and rates
+	Read(stimfilname$[1][istim%]);      'readin the stim name and write into 1st column sfilname
+	Read(stimduration[istim%]);         'readin stimlus duration for each stim and check 
+    checkptsgot% := stimduration[istim%]*sratfac[istim%]*dacrate%;
+    if (stimduration[istim%] >= afterstim/100000)
+    then 
+        message("!!!Stimdus duration is longer than recording duration!!!");
+        message("Please check log file & adjust the ISI or stimulus duration!");
+        PrintLog(istim%, "  ", sfilnam$[1][istim%], "  ", stimduration[istim%]);
+        FileClose();
+        halt;break;
+    endif
+    
+    if abs((checkstimduration[istim%] - stimduration[istim%])) > 0.002
+    then
+        PrintLog("The stimulus duration calculated from ptsgot% and Duration file shouldn't be so different!\n ");
+        If(Query("Stimulus Duration or Stimulus SamplingRate is wrong, Continue anyway?","YES","NO, halt")) = 0 then 
+				'consider Yield(.5); here to allow for completion of diskwrite
+				SampleStop();
+				halt;
+        endif;
+    endif
+    
+    if  (stimfilname$[1][istim%] <> sfilnam$[1][istim%])
+    then 
+        message("!!!Stimdus file name in Stim File & Duration File doesn't match!!!");
+        message("Please check log file for name mismatch!");
+        PrintLog(istim%, "  MisMatch: ", "  Stim  ", sfilnam$[1][istim%], "  Duration  ", stimfilname$[1][istim%]);
+        FileClose();
+        halt;break;
+    endif
+next;
+FileClose(); 
+
+' After checking the stimulus duration file, add that infor into sfilnam
+var prefix$; ' used to add stimulus duration infor before the stimulus name in TextMark channel
+for istim% := 1 to nstims% do	
+    prefix$ := "Duration: " + str$(checkstimduration[istim%]) + "; Name: ";
+    sfilnam$[1][istim%]	:= prefix$ + sfilnam$[1][istim%];
+	FileClose();
+next;
+PrintLog(sfilnam$[1][1:nstims%]);
+PrintLog(checkstimduration[1:nstims%]);
+
+If(Query("Ready to recording?","YES, start sampling","No, quit"))=0 then
+WindowVisible(0);				'hide all the data
+RedoStimOrder();
+endif;
+FileClose();
+
+' -----------------------------------------------------Part5----------------------------------------------------
+' double buffer system is used in the new version to give PC more time to transfer stimulus data into CED
+
+SampleChannels(60);  ' This function could be used to set the number of channels available for sampling 
+
+'' load the first stim into Playwaveform Area A & Initialize Area B
+cstim% := stimseq%[0];								'get first stim code
+cstimno%[0] := cstim%;								'save code to array
+curstim1$ := sfilnam$[1][cstim%];					'get first stim name
+pwa% := PlayWaveAdd("A","stim",0,dacrate%,stimarr%[:stimlen%][cstim%]);	'load first stim into CED Waveform Area A
+PlayWaveSpeed("A",sratfac[cstim%]);										'and set its speed relative to 40K
+pwa% := PlayWaveAdd("B","stim",0,dacrate%,stimarr%[:stimlen%][cstim%]);	'load first stim into CED Waveform Area A
+PlayWaveSpeed("B",sratfac[cstim%]);	
+if pwa%<0 then message("error on first stim load"); PrintLog(Error$(wavecopy%)); halt; endif;
+
+PrintLog("1", " Next Stim ",cstim%,"  ",curstim1$);
+'set up sampling window and file
+
+if SampleStatus()= 0 then 'if pre-existing file found
+    View(SampleHandle(0)); 'get rid of it!
+    FileClose(0,-1); 'This could happen if user created a new file, quit the script without sampling then ran the script again
+endif;
+fnh% :=FileNew(0,1);				'open data file and display; set up to receive data 
+if fnh% < 0 then    
+    ' Test whether the new file is created successfully. 
+    ' Two possible reasons of failing to create new file: 
+    '       1. the recording session is not closed from last recording, even though the data file is not displayed. 
+    '       2. the configuration file is there but not compatible with current version of Spike2
+    Message(Error$(fnh%));
+endif
+
+ViewTrigger(32, 0, 0, 0);			'use MARK to trigger view
+XRange(0,3);						'set width to 3s
+FrontView(fnh%);
+Window(0,15,100,100);				'set window to useful size
+lh% := Loghandle();
+View(lh%);
+Window(0,0,90,15);	                'set window to useful size
+WindowVisible(1);
+
+'tstims: number of stimulus trials
+SampleSeqVar(100,tstims%);      'V100: number of loops to be executed in the Sequence File
+
+''start sampling
+Yield(.5);  'wait for 0.5 seconds to help the program get rid of unused memory
+' SampleSeqVar(3,cstim%) equals to V3 := cstim% := stimseq%[0]
+SampleSeqVar(77,cstim%);		'write stim no code to V77 sequence
+' SampleSeqVar(5,isidel%) equal to V5 := 100000*(isi-6.0) + 24995 
+SampleSeqVar(5,gapduration);	'set V5 in sequencer for ISI=isidel+3s=6s+isidel; gapduration = isi*100000*2/10 - 5200
+'set V10 in Sequence File to be one fifth of isi; 
+'V10 is used to determine when the recording starts relative before the stimulus is presented
+SampleSeqVar(10,prestim);  ' prestim := isi*100000*3/10
+'set V11 in Sequence File to be six tenthes of isi; 
+'V11 determines the duration of recording after stimulus starts; 
+'So, V11 must be larger than the duration of stimulus, which is shorter than one half of isi
+SampleSeqVar(11,isi*100000*5/10); 'V11 has to be longer than the duration of the stimulus, otherwise 
+SampleSeqVar(4,1);			' set V4 go-ahead to GO, V4 := 1
+SampleSeqVar(1,1);          ' set V1 to 1
+
+'*********TURN ON SAMPLING**********
+SampleStart(-1);								'start sampling
+
+' !!! The first waiting time could be critical ... 
+Yield(0.020);          'wait for 0.02 seconds
+
+'_____________________________________MAIN LOOP_________________________________________
+' Main loop contains 3 parts: 
+' 1st loop: wait until the the next recording session starts. 
+' 2nd load: update the Waveform Area that is playing 
+' 3rd loop: after the sequence file finishes recording session AND V1 is set to 0, 
+    ' (stimulus onset to a certain time determined by V11), a time window is provided 
+    ' so that the user has a chance to stop the program by pressing 's' 
+' Double bufffer system: the reading & writing of stimulus alternates between PlayArea Waveform A and B
+
+var PlayArea%, abc, V1%, V101%, timestart, timestop, gap;
+' PlayArea% := SampleSeqVar(65);  ' Obtain the waveform area that the CED would play in this loop: either A or B
+
+for istim% := 1 to (tstims%-1) do
+    timestart := seconds();
+    V101% := SampleSeqVar(101);  
+    
+    ' 1st loop: wait until the the next recording session starts. 
+	repeat 		'wait until V1 goes non-zero(it's the time when next recording session starts)
+        V1% := SampleSeqVar(1);  
+        'PrintLog(" V1:       ",V1%);		'log status
+		View(lh%);
+		key% := Inkey();				'test for key press - best pressed after stim hold for >=3s		
+		if key% = 83 then			'83 is letter "s" for stop
+			SampleSeqVar(4,0);		'set V4 go-ahead STOP to pause sampling
+			Sound(1000,1);
+			PrintLog("Interrupted");
+			If(Query("Continue sampling?","YES","NO, halt")) = 0 then 
+				SampleStop();
+				halt;
+			endif;
+			SampleSeqVar(4,1);		'set V4 go-ahead to GO to restart sampling
+		endif;
+		Yield(.01);   
+    until V1%=1;   'wait until V1 goes non-zero(it's the time when next recording session starts)
+    ' 1st loop: wait until the the next recording session starts. 
+    
+    ' 2nd load: update the Waveform Area that is playing 
+    PlayArea% := SampleSeqVar(65);  ' Obtain the waveform area that the CED would play in this loop: either A or B
+    PrintLog("Playarea:     ",PlayArea%);		'log status
+    PrintLog("V101:         ",V101%);		'log status
+	
+    ' Following 6 lines are used for debugging, to debug, uncomment them 
+'     timestop := seconds();
+'     gap := timestop - timestart;
+'     PrintLog("LoopingTime:  ",gap);	
+'    DebugList(-3);   'Disable timing
+'    DebugList(-1);   'Reset call counts and times
+    '    DebugList(-2);   'Enable timing
+    
+    Draw();			      
+    if PlayArea% = 1 then
+        SampleText(curstim1$,-1,cstimno%[]);			'write stimname and number to data	
+        cstim% := stimseq%[istim%];	
+        cstimno%[0] := cstim%;		'save code to array
+        SampleSeqVar(78,cstim%);						'write next stim no code to V78 for sequence file
+        wavecopy% := PlayWaveCopy("B",stimarr%[:stimlen%][cstim%]);		'load next stim to Area B when Area A is palying
+        abc := PlayWaveSpeed("B",sratfac[cstim%]);		'and set its speed
+        curstim2$ := sfilnam$[1][cstim%];			    'get next stim name	
+        PrintLog((istim%+1), " Next Stim ",cstim%,"  ",curstim2$);		'log status
+    else 
+        SampleText(curstim2$,-1,cstimno%[]);			'write stimname and number to data	
+        cstim% := stimseq%[istim%];	
+        cstimno%[0] := cstim%;		                    'save code to array
+        SampleSeqVar(77,cstim%);						'write next stim code to V77 for sequence file
+        wavecopy% := PlayWaveCopy("A",stimarr%[:stimlen%][cstim%]);		'load next stim to Area A when Area B is palying
+        abc := PlayWaveSpeed("A",sratfac[cstim%]);				'and set its speed
+        curstim1$ := sfilnam$[1][cstim%];			            'get next stim name	
+        PrintLog((istim%+1), " Next Stim ",cstim%,"  ",curstim1$);		'log status
+    endif;
+    ' 2nd load: update the Waveform Area that is playing 
+    ' Following 4 lines are used for debugging, to debug, uncomment them 
+'    DebugList(-3);   'stop accumulating times
+'    PrintLog("Command name     Total calls      Seconds      us/call Index\n");
+'    DebugList(576, 5); 'list times and index numbers
+'    DebugList(586, 5); 'list times and index numbers
+    
+    ' 3rd loop: give the user a chance to stop the recording
+	repeat 		'wait until V1 goes zero(next trial started)
+        V1% := SampleSeqVar(1);  
+        'PrintLog(" V1:       ",V1%);		'for debugging
+		View(lh%);
+		key% := Inkey();		    'test for key press - best pressed after stim hold for >=3s		
+		if key% = 83 then			'83 is letter "s" for stop
+			SampleSeqVar(4,0);		'set V4 go-ahead STOP to pause sampling
+			Sound(1000,1);
+			PrintLog("Interrupted");
+			If(Query("Continue sampling?","YES","NO, halt")) = 0 then 
+				'consider Yield(.5); here to allow for completion of diskwrite
+				SampleStop();
+				halt;
+			endif;
+			SampleSeqVar(4,1);		'set V4 go-ahead to GO to restart sampling
+		endif;
+		Yield(.001);   ' use shorter looping period to speed the detection of V1's change
+    until V1%=0;  'wait until V1 goes zero(next trial started)
+    
+    timestop := seconds();
+    gap := timestop - timestart;
+    PrintLog("LoopingTime:  ",gap);		'log status
+    if (V101% - istim%) > 0 then  ' istim% + 1 normally should equal to V101 + 1
+        PrintLog("******************************************ERROR*******************************************\n "); 
+    else
+        PrintLog("-----------------------------------------------------------\n ");
+    endif;
+
+next;
+
+if PlayArea%=1 then  'wrtie down the last stim name into Text Channel
+    SampleText(curstim2$,-1,cstimno%[]);
+else
+    SampleText(curstim1$,-1,cstimno%[]);
+endif;
+'________________________________________________________________________________________
+'Wait for certain time to make sure the recording is over
+var waittime;   'Waittime = the recording duration after stimulus started 
+'waittime% := (SampleSeqVar(5)+SampleSeqVar(10)+SampleSeqVar(11))/100000 + 0.1;   'SampleSeqVar(11)=SampleSeqVar(11,isi*100000*6/10);
+waittime := isi*1.0;
+Draw();
+Yield(waittime);					' wait for sample completion - depnds on ISI
+SampleStop();                       ' Stop the recording
+View(fnh%);							' set data as current
+If FileSaveAs(datfilnsmr$,-1) <0 then PrintLog("file save error #"); endif;
+PrintLog("DONE- saving data: ");
+PrintLog(datfiln$);
+halt;
+
+' -----------------------------------------------------Part6----------------------------------------------------
+'' All functions used in the main script are defined below: 
+'' Including: Shuffle, StimOder, Stimset, Logclear, samphalt, RedoStimOrder
+proc Shuffle(dat%[])
+var l%;
+l% := len(dat%[]);
+var i%, n%, p%, v%;
+for i% := 1 to 5 do                ' Five passes randomises nicely
+   for n% := 0 to l%-1 do        ' each pass goes through entire array
+      p% := rand() * l%;        ' Random number from 0 to l%-1
+      v% := dat%[p%];         ' Swap data in two locations
+      dat%[p%] := dat%[n%];
+      dat%[n%] := v%;
+   next;
+next;
+end;
+
+proc Stimset();			'build stim array in interleaved order
+LogClear();		'set and clear log window
+'get info from user
+PrintLog("\n","**Total stims must be <= 2000**");
+nreps% := Input("number of repeats?",nreps%);
+tstims% := nstims%*nreps%;          ' # of stim trials 
+PrintLog ("nstims ","  nreps ", "  total");
+PrintLog (nstims%,"        ",nreps%, "       ", tstims%);
+If(Query("Stimulus Order?(if non-random)","aaabbbccc","abcdabcd"))=1 then
+'aaabbbccc procedure
+for instims% := 1 to nstims% do	'load each stim number
+	for inreps% := 1 to nreps% do			'number of repeats of stim nos
+		stimseq%[iarr%] := instims%;		'stim no into array aaaabbbbb
+		iarr% := iarr% + 1;				'bump array index
+	next;
+next;
+else
+'abcdabcd procedure
+for inreps% := 1 to nreps% do			'number of repeats of stim nos
+	for instims% := 1 to nstims% do	'load stim numbers
+		stimseq%[iarr%] := instims%;		'stim no into array abcdabcd
+		iarr% := iarr% + 1;				'bump array index
+	next;
+next;
+endif;
+
+return;
+end;	'end of stimset
+
+proc LogClear();
+'show and clear the logfile
+var lh%;
+lh% := Loghandle();
+FrontView(lh%);
+Window(0,0,80,60);	'set window to useful size
+'WindowVisible(1);
+EditSelectAll();		'select text in the log window
+EditClear();			'clears selected text
+return;
+end;
+
+' Using the stimulus order from file
+Proc StimInput(); 'Input a stimorder from file
+var fhstims%;
+fhstims% := FileOpen("*",8,0,"Choose Stimulus Order File");		'open it
+if fhstims%<0 then message("No such file");PrintLog(fhstims%);str1$ := Error$(fhstims%);PrintLog(str1$);FileClose();halt; endif;
+
+var numblocks%, numstimblock%[7]; ' at most 7 blocks of stimuli is allowed
+Read(nqstims%, numblocks%); 
+PrintLog(numblocks%);
+
+If Query("Is total number of stimuli (" + str$(nqstims%) + ") correct?", "Yes", "No") = 1 then
+    tstims% := nqstims%; ' tstims% is used to denote total number of stimulus in later scripts; it needs to be set. 
+endif
+PrintLog(listfil$,"number of stims  ",nqstims%);
+
+Read(numstimblock%[0 : numblocks%]);'read in the number of stims within each block
+PrintLog(numstimblock%[]);
+
+var stimseq111%[4000], stimseq222%[4000], stimseq333%[4000], stimseq444%[4000], stimseq555%[4000], stimseq666%[4000], stimseq777%[4000];
+Read(stimseq111%[0:numstimblock%[0]]); 
+Read(stimseq222%[0:numstimblock%[1]]); 
+Read(stimseq333%[0:numstimblock%[2]]); 
+Read(stimseq444%[0:numstimblock%[3]]); 
+Read(stimseq555%[0:numstimblock%[4]]); 
+Read(stimseq666%[0:numstimblock%[5]]); 
+Read(stimseq777%[0:numstimblock%[6]]);
+
+If Query("Shuffle within each block?", "Yes", "No") = 1 then
+    shuffle(stimseq111%[0:numstimblock%[0]]); 
+    shuffle(stimseq222%[0:numstimblock%[1]]); 
+    shuffle(stimseq333%[0:numstimblock%[2]]); 
+    shuffle(stimseq444%[0:numstimblock%[3]]); 
+    shuffle(stimseq555%[0:numstimblock%[4]]); 
+    shuffle(stimseq666%[0:numstimblock%[5]]); 
+    shuffle(stimseq777%[0:numstimblock%[6]]); 
+endif
+'if nqstims% <> tstims% then
+'    Message("Number of stims in file doesn't match|",nqstims%," VS ",tstims%);halt;
+'endif
+
+' Concatenate the shuffled sequence together
+var stimseqstring$;
+stimseqstring$ := vec2string$(stimseq111%[0:numstimblock%[0]]) + vec2string$(stimseq222%[0:numstimblock%[1]]); 
+stimseqstring$ := stimseqstring$ + vec2string$(stimseq333%[0:numstimblock%[2]]) + vec2string$(stimseq444%[0:numstimblock%[3]]);
+stimseqstring$ := stimseqstring$ + vec2string$(stimseq555%[0:numstimblock%[4]]) + vec2string$(stimseq666%[0:numstimblock%[5]]);
+stimseqstring$ := stimseqstring$ + vec2string$(stimseq777%[0:numstimblock%[6]]);
+
+ReadSetup(","); ' Deliminator used to Parse ChanString$
+ReadStr(stimseqstring$, stimseq%[0 : nqstims%]); 
+
+FileClose();							'close the list file
+return;
+end;
+
+Proc StimOrder();
+If(Query("Stimulus Order?","randomize","interleave(abcd)/block(aaabbb)"))=1 then
+'do the shuffle
+shuffle(stimseq%[:tstims%]);				'pass only the subarray actually used				
+endif;
+'display the shuffled array
+var larr%;
+larr% := Len(stimseq%[:tstims%]);
+PrintLog (" stims processed ",larr%);
+srh% := SetResult(1,larr%+1,1,0,"shuffdata try 1","n"); 'set up view window (width = length of stimset + 1)
+ArrConst(View(srh%,1).[],stimseq%[]);
+YRange(1,0,10);
+View(srh%);
+Window(40,0,100,60);	'set window to useful size
+WindowVisible(1);				'display data
+
+datfiln$ := Input$("Data file prefix:",datfiln$);		'query data file name
+datfilntxt$ := datfiln$ + ".txt";							'put on txt extension
+datfilnsmr$ := datfiln$ + ".smr";							'put on data extension
+
+'save random set here
+View(srh%);			'set shuffled as current
+If FileSaveAs(datfilntxt$,1) <0 then PrintLog("shufflefile save error #"); endif;	'saving random file (1=txt)
+FileClose();		'close shuff data view
+return;
+end;
+
+Proc RedoStimOrder();
+If(Query("Stimulus Order?","randomize","interleave(abcd)"))=1 then
+'do the shuffle
+shuffle(stimseq%[:tstims%]);				'pass only the subarray actually used				
+endif;
+
+'display the shuffled array
+var larr%;
+larr% := Len(stimseq%[:tstims%]);
+PrintLog (" stims processed ",larr%);
+srh% := SetResult(1,larr%+1,1,0,"shuffdata 2nd try","n"); 'set up view window
+ArrConst(View(srh%,1).[],stimseq%[]);
+YRange(1,0,10);
+View(srh%);
+Window(40,0,100,60);	'set window to useful size
+WindowVisible(1);				'display data
+
+If(Query("Ready?","YES, start sampling","No, quit"))=0 then
+halt;
+endif;
+WindowVisible(0);				'hide all the data
+return;
+end;
+
+func samphalt%()
+SampleStop();
+halt;
+return;
+end;
+
+
+func vec2string$(vector%[])
+var iii%, veclen%, temp$, output$;
+veclen% := len(vector%[]);
+for iii% := 0 to veclen% - 1 do
+    temp$ := str$(vector%[iii%]);
+    output$ := output$ + temp$ + ",";
+next;
+return output$;
+end;

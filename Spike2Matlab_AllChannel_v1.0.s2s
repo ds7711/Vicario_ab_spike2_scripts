@@ -1,0 +1,40 @@
+'' Open the data in GUI
+var birdID$, birdextra$; 
+var v711%; 'View created by FileOpen()
+' Open the data file that you want to extract 
+v711%:=FileOpen("E:\\14_Field L\\*.smr",0,3,"Please select the data file you want to extract: ");  
+View(v711%); ' Set the opened data file to "Current View"
+
+birdID$ :=FileName$(3);  ' This takes the filename of the current view and use it to name the extracted matlab files
+birdextra$ := FileName$(4); ' Obtain the possible trialing number of the file name
+birdID$ := birdID$ + birdextra$; ' Obtain the whole name of the data file 
+
+'' Find the length of file 
+var LengthINseconds; ' The duration of the recording file
+LengthINseconds := MaxTime(1);
+
+var MergeMarker2, MergeMarker1;
+MergeMarker2 := LastTime(18, LengthINseconds);  ' The timing of the 2nd merging Marker
+MergeMarker1 := NextTime(18, 0);    ' The timing of the 1st merging Marker
+
+'' Channel to Export together
+
+var channellist$; 
+channellist$ := "60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,1";
+var ExportFlag%; 
+ExportFlag% := 0; 
+var INSTRUCTION1$, INSTRUCTION2$; 
+INSTRUCTION1$ := "Name based on the 1st Part of the merged file! ";
+INSTRUCTION2$ := "Name based on the 2nd Part of the merged file! ";
+
+ExportChanList(1); 'Initialise the channel list
+ExportChanList(MergeMarker1 - 0.001, MergeMarker2 - 0.001, channellist$); 
+FileSaveAs("E:\\14_Field L\\" + birdID$ + "*.mat",100,0,INSTRUCTION1$,0,
+    "UseSName=1|UseCName=1|WaveTimes=0|BinFreq=0|BinTimes=0|WaveData=2|MarkAs=1|TMarkAs=2|RMarkAs=2|RMarkData=2|WaveMarkAs=2|WaveMarkData=2|Compat=0"); 'Export (string args)
+
+ExportChanList(1); 'Initialise the channel list
+ExportChanList(MergeMarker2 - 0.001, LengthINseconds, channellist$); 
+FileSaveAs("E:\\14_Field L\\" + birdID$ + "*.mat",100,0,INSTRUCTION2$,0,
+    "UseSName=1|UseCName=1|WaveTimes=0|BinFreq=0|BinTimes=0|WaveData=2|MarkAs=1|TMarkAs=2|RMarkAs=2|RMarkData=2|WaveMarkAs=2|WaveMarkData=2|Compat=0"); 'Export (string args)
+
+FileClose(v711%); 

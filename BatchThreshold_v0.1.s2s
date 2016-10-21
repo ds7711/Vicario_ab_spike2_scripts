@@ -1,0 +1,104 @@
+' Get the handle of current view
+var ok%, nfiles%, datapath$; 
+var maxdata%; 
+maxdata% := 100; ' The maximum number of data files that the algorithm could process
+var datanamelist$[maxdata%];
+FileList(datanamelist$[], 0);
+ok%:=FilePathSet("",0,"Select folder to process");	'select folder for FileList
+if ok%<0 then	
+	Message("Cannot set new directory");	 'cancelled
+    halt; 
+endif;
+datapath$ := FilePath$(0);
+nfiles%:=FileList(datanamelist$[],0);	                         'count .smr files
+if nfiles%=0 then
+	Message("No .smr files found in this folder");
+    halt;
+endif;
+
+var idx%, temppath$;
+for idx% := 0 to nfiles% - 1 do 
+    temppath$ := datapath$ + datanamelist$[idx%];
+    threshold(temppath$);
+next;
+
+'---------------------------------------------------------------------
+'---------------------------------------------------------------------
+func threshold(temppath$)
+var FVH%, birdID$, birdextra$, FullName$, LengthOfName%; 
+' Front View Hanlde, BirdID$, birdextra$, the Full Directory of the file, the length of the Full Directory
+FVH% := FileOpen(temppath$,0,3,"Select data file you want to Threshold: ");; 
+View(FVH%);
+birdID$ :=FileName$(3);  ' This takes the filename of the current view and use it to name the extracted matlab files
+birdextra$ := FileName$(4); ' Obtain the possible trialing number of the file name
+FullName$ := FileName$(); ' Obtain the full directory of the file
+DelStr$(FullName$, LengthOfName% - 3, 4); ' Delete the ".smr" extension
+birdID$ := birdID$ + birdextra$; ' Obtain the whole name of the data file 
+
+
+' Loop Through all the channels that one wants to threshold
+var ChanVec%[16], ChanString$;
+' ChanString$: store the channels that the algorithm needs to process
+' ChanVec[]: vectorized channel array
+ChanString$ := "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"; 'Alternative way to initilize a vector
+ReadSetup(","); ' Deliminator used to Parse ChanString$
+ReadStr(ChanString$, ChanVec%[]); 
+var NumChannel%; ' # of channels needs to be processed
+NumChannel% := Len(ChanVec%[]); 
+
+
+' ------------------ Main Loop for Creating New WaveMark Channels --------------------
+var ChanStd[NumChannel%], ChanThreshold[NumChannel%], ChanNum%, RecordDuration, NumStd, HCPosition; 
+' ChanStd[]: standard deviation for each channels
+NumStd := 2.5; ' Threshold = SD * NumStd
+RecordDuration := MaxTime(1); ' Obtain the recording duration from the 1st Channel
+var LoopIdx%; 
+for LoopIdx% := 0 to NumChannel% - 1 do
+    ChanNum% := ChanVec%[LoopIdx%]; 
+    if ChanNum% = 0 then
+        Continue;
+    endif;
+    NewWaveMark(ChanNum%, ChanStd[], ChanThreshold[], NumStd, RecordDuration, FVH%);
+next
+
+' For Debugging
+var TextVH%, LogFile[3][NumChannel%]; ' LogFile%: values printed in the Log
+ArrConst(LogFile[][], 0);
+TextVH% := FileNew(1, 1);
+ArrAdd(LogFile[0][:], ChanVec%[]);
+ArrAdd(LogFile[1][:], ChanStd[]);
+ArrAdd(LogFile[2][:], ChanThreshold[]);
+print("Channel Number, Standard Deviation, Threshold \n");
+print(LogFile[][]`);
+View(TextVH%);
+FileSaveAs(FullName$ + "_ThresholdLog.txt");
+
+FileClose(-1);
+end
+' ------------------ Main Loop for Creating New WaveMark Channels --------------------
+
+
+' ------------------ Procedure of Thresholding -----------------------
+proc NewWaveMark(ChanNum%, ChanStd[], ChanThreshold[], NumStd, RecordDuration, FVH%) 
+' Open the wavemark view
+var HCPosition;
+ChanStd[ChanNum% - 2] := ChanMeasure(ChanNum%, 12, 0, RecordDuration);
+ChanThreshold[ChanNum% - 2] := NumStd * ChanStd[ChanNum% - 2]; ' Index starts from 0
+HCPosition := HCursor(1, ChanThreshold[ChanNum% - 2], ChanNum%); 
+View(FVH%);
+var WMH%; ' WaveMark View Handle
+WMH% := SSOpen(2, 0); 'Open New Wavemark spike shape dialog
+SSChan(ChanNum%);
+HCursor(1, -5); 'Set Wavemark trigger level
+HCursor(2, ChanThreshold[ChanNum% - 2]); 'Set Wavemark trigger level
+SSParam(20, 32.00, 50, 20.00, 80.00, 3, 0, 64, 0, 9); 'Set all parameters
+SSButton(7, 1); 'Make templates: 1=yes, 0=no
+var ChanNewWaveMark%; 
+var ch%[2];   ' for channel specifications
+ChanNewWaveMark% :=1; 
+if View(ViewLink()).ChanList(ch%, 128) > 0 then 'If unused channels
+    ChanNewWaveMark% := ch%[1];                 'use first
+    SSClassify(1, ChanNewWaveMark%, 6);         'Create new WaveMark channel
+endif;
+FileClose(); 
+end;

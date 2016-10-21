@@ -1,0 +1,143 @@
+'analrms05DUR_16.s2s
+var v17%,  maxt%, code%[4], stim%, stimrel%, durflag%;
+var chan%, x1, x2, dur, durx, rms, itim, stimt, stimtx, stimton, ntim1, endcod, crms;
+var stim1%,stim2%,stch%, ench%,disp%;
+var nstims%,istim%,stimdur[31],sfil$,str1$,sfilnam$[2][31];						'set up string array dim's n+1 of what you need
+var isite%,nsites%,ndatpts%,maxnforav%;
+var rmsmax,rmsfac,rmsdata[31][17],nrmsdata[31][17];			'max stims = 31, max sites = 16
+var srh%,lh%, fh%;
+LogClear();
+'query stim file, get stim filenames and durations
+fh% := FileOpen("*",8,0,"Choose Stimulus duration File");		'open it
+if fh%<0 then message("No such file");PrintLog(fh%);str1$ := Error$(fh%);PrintLog(str1$);FileClose();halt; endif;
+Read(nstims%); 														'read in the number of stims
+for istim% := 1 to nstims% do										'read in the filenames and rates
+	Read(sfilnam$[1][istim%]);
+	Read(stimdur[istim%]);
+	PrintLog(istim%, " ", stimdur[istim%], "secs "," ", sfilnam$[1][istim%]);
+next;
+PrintLog("NUMBER OF STIMULI IN LIST ", nstims%);			'report number of stimuli
+FileClose();							'close the list file
+'set and get parameters
+stim1% := Input("enter starting stim number ",1);
+stim2% := Input("enter ending stim number ",nstims%);
+stch% := Input("enter starting channel number ",2);
+ench% := Input("enter ending channel number ",17);
+stimt := 0.5;						'time of stim
+stimtx := 0.0;						'default stim onset shift for rms measurement
+stimtx := Input(" default stimonset 0.5 SECS, enter +/- SECS to shift rms onset",stimtx);
+stimton := stimt + stimtx;		'add shift to compute stim onset for measurement
+dur := 0.0;	durflag%:= 0;		'init to zero
+dur := Input("enter duration of rms window (CR for default=stimdur)",dur);
+if dur = 0 then
+	durflag% := 1;					'set to 1 to use stimdur + durx
+	durx :=	0.1;					'default dur extension for rms measurement
+	durx := Input("enter +/- SECS to add to stimdur SECS for rms window",durx);
+else
+	durx := 0.0;
+endif;
+maxnforav% := Input("enter number of stimreps for avRMS display",10);
+disp% := Query("view display and cursors?");
+'open a window for data
+v17%:=FileOpen("*",0,3);
+Window(40,0,100,100);
+CursorNew(1,1);
+CursorNew(2,2);
+'get ready to loop
+MarkMask(32, -1, 1, -1);  					'turn on all codes for all layers
+PrintLog("/n","chan# stimcod reltrial# conrms(0-0.5) rms stimtime dur rmsdur stimonshift");
+maxt% := MaxTime(1);
+ndatpts% := stim2% - stim1% + 1;			'how many stims
+nsites% := ench% -stch% + 1;				'how many electrode channels
+endcod := -1.0;	'code returned when no more markers
+WindowVisible(2);	'iconise data window
+'...........................................................
+for chan% := stch% to ench% do				'channel loop
+for stim% := stim1% to stim2% do				'stim loop'
+'---------------------------------
+ntim1 := 0-0.1;		'reset start time for next pass
+stimrel% := 0;			'rezero counter
+while ntim1 <> endcod do
+		code%[0] := 99; 		'set error code
+		ntim1 := NextTime(32,ntim1,code%[]);		'next code (IDstim=30, trig=32)
+			If code%[0]=stim% then
+			stimrel% := stimrel% + 1; 					'count how many of this stim
+			if durflag% = 1 then							'use stimdur + durx	
+				dur := stimdur[stim%] + durx;			'set to dur for this stimulus + extension 
+			endif;
+			itim := LastTime(32,ntim1,code%[]);			'back up to previous marker to get trial time
+				if code%[0]=65 then								'trial onset = 65 = "A"
+				'code%[1]=oldcode[0];
+				'MarkEdit(32, itim, code%[]);			edit marker to add stim
+				XRange(itim-.1,itim+3); 	'set window to frame trial for display
+				x1 := itim + stimton;		'begin of rms window (trialstart + (0.5S + shift))
+				x2 := x1 + dur;				'end rms window (begin + (stimdur + extension))
+				Cursor(1,x1);
+				Cursor(2,x2);	
+					If disp% = 1 then View (v17%); WindowVisible(1); Yield(.3); endif;	
+				rmsfac := 1000;			'set factor to upcsale rms values for excel
+				crms := rmsfac*ChanMeasure(chan%, 11, itim, itim+stimt); 'get control rms (code=11) trialstart - stim onset
+				rms := rmsfac*ChanMeasure(chan%, 11, x1, x2); 'get rms (code=11) over dur from stimtonset
+				PrintLog(chan%, " ",stim%," ",stimrel%, " ",crms, " ",rms," ",x1-stimton," ",stimdur[stim%]," ", (x2-x1), " ",stimtx);
+				'average and save RMS to each channel rmsdata[stims,sites]
+					if stimrel% <= maxnforav% then					'compute rms-control rms
+						rmsdata[stim%][chan%-1] := (rms - crms + rmsdata[stim%][chan%-1]); 'add to existing data, correct for chan no (-1)
+					endif;
+				endif;
+			endif;
+wend;		'keep going
+'---------------------------------------
+next;		'next stim
+next;		'next chan
+'..............................................................
+'+++++
+'code for rms data display
+srh% := SetResult(nsites%,ndatpts%+1,1,0,"RMS-contRMS for each stim at each site","stimlab","normavRMS"); 'set up view window
+var tuningVH%, header%; ' handle for tuning text
+tuningVH% := Filenew(1, 1);
+
+'' Generate Frequency Vector ..............................................................
+var start := 500, interval := 250, stop := 5000;
+var i%, num%;
+num% := (stop - start) / interval;
+var vector[num% + 1]; 
+for i% := 0 to num% do
+    vector[i%] := start + i% * interval; 
+next;
+'' Generate Frequency Vector ..............................................................
+
+print("Electrode,", "Best Frequency,", vector);
+for isite% := 1 to nsites% do 
+	ArrDiv(rmsdata[:ndatpts%+1][isite%],maxnforav%);		'compute average /n
+	rmsmax := rmsdata[Max(rmsdata[:ndatpts%+1][isite%])][isite%];		'find index of max RMS at site
+	'PrintLog(isite%,"  ",rmsdata[:ndatpts%+1][isite%]);
+	ArrConst(nrmsdata[:ndatpts%+1][isite%],rmsdata[:ndatpts%+1][isite%]); 'copy data to new array
+    View(tuningVH%);
+    Print(isite%, ",", vector[Max(rmsdata[:ndatpts%+1][isite%]) - 1], ",", rmsdata[1:ndatpts%][isite%]);
+	ArrDiv(nrmsdata[:ndatpts%+1][isite%],rmsmax);  'normalize to max and plot to View
+	ArrConst(View(srh%,isite%).[],rmsdata[1:ndatpts%+1][isite%]);  'correct ndatapts for 0 offset
+    'ArrConst(View(srh%,isite%).[],nrmsdata[1:ndatpts%+1][isite%]);  'correct ndatapts for 0 offset
+    View(srh%);
+    Optimise(isite%);
+    'YRange(isite%,0,1.0);  'Optimise(isite%);
+next;
+View(srh%);
+'Func DrawMode(-1, 4); 				'all chans, skyline,
+Window(60,0,85,100);WindowVisible(1);	'set window to useful size and display data
+'+++++
+View (v17%);
+FileClose(1);
+View(tuningVH%);
+Window(50,0,100,100);
+FileSaveAs("*");
+halt;
+
+proc LogClear(); 'show and clear the logfile
+lh% := Loghandle();
+FrontView(lh%);
+Window(0,0,40,60);	'set window to useful size
+'WindowVisible(1);
+EditSelectAll();		'select text in the log window
+EditClear();			'clears selected text
+return;
+end;
